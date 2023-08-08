@@ -1,0 +1,16 @@
+[default.general]
+chip = "nrf52833_xxAA" # uncomment this line for micro:bit V2
+
+[default.reset]
+halt_afterwards = false
+
+[default.rtt]
+enabled = true
+show_timestamps = true
+# Whether to save rtt history buffer on exit.
+log_enabled = true
+# Where to save rtt history buffer relative to manifest path.
+log_path = "./logs"
+
+[default.gdb]
+enabled = false
