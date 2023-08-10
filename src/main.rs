@@ -4,11 +4,13 @@
 // use defmt_rtt as _;
 // use panic_halt as _;
 
-use rtt_target::{rtt_init_print, rprintln};
 use panic_rtt_target as _;
+use rtt_target::{rprintln, rtt_init_print};
 
 use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
+
+use libm::round;
 
 use cortex_m_rt::entry;
 use microbit::{
@@ -19,15 +21,25 @@ use microbit::{
         prelude::OutputPin,
         pwm,
         rtc::{Rtc, RtcInterrupt},
-        time::Hertz, Timer,
+        time::Hertz,
+        Timer,
     },
     pac::{self, interrupt},
     Board,
 };
 
+const BASE_INTERVAL: u32 = 32;
 static RTC: Mutex<RefCell<Option<Rtc<pac::RTC0>>>> = Mutex::new(RefCell::new(None));
 static SPEAKER: Mutex<RefCell<Option<pwm::Pwm<pac::PWM0>>>> = Mutex::new(RefCell::new(None));
-static DURATION: Mutex<RefCell<u32>> = Mutex::new(RefCell::new(32));
+static INTERVAL: Mutex<RefCell<f64>> = Mutex::new(RefCell::new(BASE_INTERVAL as f64));
+
+fn to_bpm(interval: f64) -> f64 {
+    round(BASE_INTERVAL as f64 / interval * 60.0)
+}
+
+fn to_interval(bpm: f64) -> f64 {
+    BASE_INTERVAL as f64 / bpm * 60.0
+}
 
 #[entry]
 fn main() -> ! {
@@ -79,7 +91,6 @@ fn main() -> ! {
             .set_seq_end_delay(pwm::Seq::Seq0, 0);
 
         cortex_m::interrupt::free(move |cs| {
-
             *RTC.borrow(cs).borrow_mut() = Some(rtc);
             *SPEAKER.borrow(cs).borrow_mut() = Some(speaker);
 
@@ -92,43 +103,40 @@ fn main() -> ! {
 
         loop {
             if let Ok(true) = button_a.is_low() {
-                rprintln!("Button A low");
-
                 cortex_m::interrupt::free(move |cs| {
-                    let mut duration = DURATION.borrow(cs).borrow_mut();
-                    *duration += 1;
-                    rprintln!("Duration: {}", *duration);
+                    let mut interval = INTERVAL.borrow(cs).borrow_mut();
+                    let bpm = to_bpm(*interval) - 1.0;
+                    if bpm > 0.0 {
+                        *interval = to_interval(bpm);
+                    }
+                    rprintln!("BPM: {}, interval: {}", bpm, interval);
                 });
-                timer.delay_ms(200_u32);
+                timer.delay_ms(100_u32);
             };
 
             if let Ok(true) = button_b.is_low() {
-                rprintln!("Button B low");
-
                 cortex_m::interrupt::free(move |cs| {
-                    let mut duration = DURATION.borrow(cs).borrow_mut();
-                    if *duration > 0 {
-                        *duration -= 1;
+                    let mut interval = INTERVAL.borrow(cs).borrow_mut();
+                    if *interval > 0.0 {
+                        let bpm = to_bpm(*interval) + 1.0;
+                        *interval = to_interval(bpm);
+                        rprintln!("BPM: {}, interval: {}", bpm, interval);
                     };
-                    rprintln!("Duration: {}", *duration);
                 });
-                timer.delay_ms(200_u32);
+                timer.delay_ms(100_u32);
             };
-
         }
     }
 
     loop {
         continue;
     }
-
 }
 
-
-// RTC interrupt, exectued for each RTC tick
+// RTC interrupt, executed for each RTC tick
 #[interrupt]
 fn RTC0() {
-    static mut SLEEP_COUNTER: u32 = 32;
+    static mut SLEEP_COUNTER: u32 = BASE_INTERVAL;
 
     /* Enter critical section */
     cortex_m::interrupt::free(|cs| {
@@ -137,10 +145,9 @@ fn RTC0() {
             SPEAKER.borrow(cs).borrow().as_ref(),
             RTC.borrow(cs).borrow().as_ref(),
         ) {
+            let interval = INTERVAL.borrow(cs).borrow();
 
-            let duration = DURATION.borrow(cs).borrow();
-
-            if *SLEEP_COUNTER >= *duration {
+            if *SLEEP_COUNTER as f64 >= *interval {
                 speaker.set_period(Hertz(440));
                 let max_duty = speaker.max_duty();
                 speaker.set_duty_on_common(max_duty / 2);
@@ -156,4 +163,3 @@ fn RTC0() {
     });
     *SLEEP_COUNTER += 1;
 }
-
