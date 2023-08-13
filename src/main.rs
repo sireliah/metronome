@@ -28,7 +28,7 @@ use microbit::{
     Board,
 };
 
-const BASE_INTERVAL: u32 = 32;
+const BASE_INTERVAL: u32 = 512;
 static RTC: Mutex<RefCell<Option<Rtc<pac::RTC0>>>> = Mutex::new(RefCell::new(None));
 static SPEAKER: Mutex<RefCell<Option<pwm::Pwm<pac::PWM0>>>> = Mutex::new(RefCell::new(None));
 static INTERVAL: Mutex<RefCell<f64>> = Mutex::new(RefCell::new(BASE_INTERVAL as f64));
@@ -59,7 +59,7 @@ fn main() -> ! {
         let mut timer = Timer::new(board.TIMER0);
 
         // Interrupt every 1/32s  (32768 / 32 Hz) - 1 = 1023
-        let prescaler = 1023; // 32 Hz
+        let prescaler = 63; // 512 Hz
         let mut rtc = Rtc::new(board.RTC0, prescaler).unwrap();
         rtc.enable_counter();
         rtc.enable_interrupt(RtcInterrupt::Tick, Some(&mut board.NVIC));
@@ -109,7 +109,7 @@ fn main() -> ! {
                     if bpm > 0.0 {
                         *interval = to_interval(bpm);
                     }
-                    rprintln!("BPM: {}, interval: {}", bpm, interval);
+                    rprintln!("----BPM: {}, interval: {}", bpm, interval);
                 });
                 timer.delay_ms(100_u32);
             };
@@ -120,7 +120,7 @@ fn main() -> ! {
                     if *interval > 0.0 {
                         let bpm = to_bpm(*interval) + 1.0;
                         *interval = to_interval(bpm);
-                        rprintln!("BPM: {}, interval: {}", bpm, interval);
+                        rprintln!("----BPM: {}, interval: {}", bpm, interval);
                     };
                 });
                 timer.delay_ms(100_u32);
@@ -136,7 +136,8 @@ fn main() -> ! {
 // RTC interrupt, executed for each RTC tick
 #[interrupt]
 fn RTC0() {
-    static mut SLEEP_COUNTER: u32 = BASE_INTERVAL;
+    static mut SLEEP_COUNTER: u32 = 0;
+    static BEEP_DURATION: f64 = 8.0;
 
     /* Enter critical section */
     cortex_m::interrupt::free(|cs| {
@@ -147,15 +148,20 @@ fn RTC0() {
         ) {
             let interval = INTERVAL.borrow(cs).borrow();
 
-            if *SLEEP_COUNTER as f64 >= *interval {
+            // rprintln!("SLEEP_COUNTER: {}", *SLEEP_COUNTER);
+            // FIXME: not matching at 60 BPM - why? BEEP_DURATION?
+            if *SLEEP_COUNTER as f64 >= *interval && *SLEEP_COUNTER as f64 <= *interval + BEEP_DURATION {
+                rprintln!("Interval: {}, SLEEP: {}", *interval, *SLEEP_COUNTER);
                 speaker.set_period(Hertz(440));
                 let max_duty = speaker.max_duty();
                 speaker.set_duty_on_common(max_duty / 2);
 
-                *SLEEP_COUNTER = 0;
             } else {
                 speaker.disable();
             }
+            if *SLEEP_COUNTER as f64 > *interval + BEEP_DURATION {
+                *SLEEP_COUNTER = 0;
+            };
 
             // Clear the RTC interrupt
             rtc.reset_event(RtcInterrupt::Tick);
