@@ -1,9 +1,6 @@
 #![no_main]
 #![no_std]
 
-// use defmt_rtt as _;
-// use panic_halt as _;
-
 use panic_rtt_target as _;
 use rtt_target::{rprintln, rtt_init_print};
 
@@ -28,7 +25,7 @@ use microbit::{
     Board,
 };
 
-const BASE_INTERVAL: u32 = 512;
+const BASE_INTERVAL: u32 = 128;
 static RTC: Mutex<RefCell<Option<Rtc<pac::RTC0>>>> = Mutex::new(RefCell::new(None));
 static SPEAKER: Mutex<RefCell<Option<pwm::Pwm<pac::PWM0>>>> = Mutex::new(RefCell::new(None));
 static INTERVAL: Mutex<RefCell<f64>> = Mutex::new(RefCell::new(BASE_INTERVAL as f64));
@@ -58,15 +55,15 @@ fn main() -> ! {
 
         let mut timer = Timer::new(board.TIMER0);
 
-        // Interrupt every 1/32s  (32768 / 32 Hz) - 1 = 1023
-        let prescaler = 63; // 512 Hz
+        // Interrupt every 1/128 s  (32768 / 128 Hz) - 1 = 255
+        let prescaler = 255; // 128 Hz
         let mut rtc = Rtc::new(board.RTC0, prescaler).unwrap();
         rtc.enable_counter();
         rtc.enable_interrupt(RtcInterrupt::Tick, Some(&mut board.NVIC));
         rtc.enable_event(RtcInterrupt::Tick);
 
         // To for speakers use board.pins.p0_02 and large pin 0 on the board
-
+        // let mut speaker_pin = board.pins.p0_02.into_push_pull_output(gpio::Level::High);
         let mut speaker_pin = board.speaker_pin.into_push_pull_output(gpio::Level::High);
         let _ = speaker_pin.set_low();
 
@@ -148,20 +145,14 @@ fn RTC0() {
         ) {
             let interval = INTERVAL.borrow(cs).borrow();
 
-            // rprintln!("SLEEP_COUNTER: {}", *SLEEP_COUNTER);
-            // FIXME: not matching at 60 BPM - why? BEEP_DURATION?
-            if *SLEEP_COUNTER as f64 >= *interval && *SLEEP_COUNTER as f64 <= *interval + BEEP_DURATION {
-                rprintln!("Interval: {}, SLEEP: {}", *interval, *SLEEP_COUNTER);
+            if *SLEEP_COUNTER as f64 >= *interval {
                 speaker.set_period(Hertz(440));
                 let max_duty = speaker.max_duty();
                 speaker.set_duty_on_common(max_duty / 2);
-
+                *SLEEP_COUNTER = 0;
             } else {
                 speaker.disable();
             }
-            if *SLEEP_COUNTER as f64 > *interval + BEEP_DURATION {
-                *SLEEP_COUNTER = 0;
-            };
 
             // Clear the RTC interrupt
             rtc.reset_event(RtcInterrupt::Tick);
