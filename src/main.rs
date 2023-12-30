@@ -61,9 +61,8 @@ fn main() -> ! {
         rtc.enable_event(RtcInterrupt::Tick);
 
         // For jack output use board.pins.p0_02 and large pin 0 on the board
-        // let mut speaker_pin = board.pins.p0_02.into_push_pull_output(gpio::Level::High);
-        let mut speaker_pin = board.speaker_pin.into_push_pull_output(gpio::Level::High);
-        let _ = speaker_pin.set_low();
+        // let mut speaker_pin = board.pins.p0_02.into_push_pull_output(gpio::Level::Low);
+        let mut speaker_pin = board.speaker_pin.into_push_pull_output(gpio::Level::Low);
 
         // Use the PWM peripheral to generate a waveform for the speaker
         let speaker = pwm::Pwm::new(board.PWM0);
