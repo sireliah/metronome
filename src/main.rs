@@ -46,8 +46,6 @@ fn main() -> ! {
     if let Some(mut board) = Board::take() {
         let button_a = board.buttons.button_a.into_pullup_input();
         let button_b = board.buttons.button_b.into_pullup_input();
-
-        // NB: The LF CLK pin is used by the speaker
         let _clocks = Clocks::new(board.CLOCK)
             .enable_ext_hfosc()
             .set_lfclk_src_synth()
@@ -62,7 +60,7 @@ fn main() -> ! {
         rtc.enable_interrupt(RtcInterrupt::Tick, Some(&mut board.NVIC));
         rtc.enable_event(RtcInterrupt::Tick);
 
-        // To for speakers use board.pins.p0_02 and large pin 0 on the board
+        // For jack output use board.pins.p0_02 and large pin 0 on the board
         // let mut speaker_pin = board.pins.p0_02.into_push_pull_output(gpio::Level::High);
         let mut speaker_pin = board.speaker_pin.into_push_pull_output(gpio::Level::High);
         let _ = speaker_pin.set_low();
@@ -70,17 +68,11 @@ fn main() -> ! {
         // Use the PWM peripheral to generate a waveform for the speaker
         let speaker = pwm::Pwm::new(board.PWM0);
         speaker
-            // output the waveform on the speaker pin
             .set_output_pin(pwm::Channel::C0, speaker_pin.degrade())
-            // Use prescale by 16 to achive darker sounds
             .set_prescaler(pwm::Prescaler::Div16)
-            // Initial frequency
             .set_period(Hertz(440u32))
-            // Configure for up and down counter mode
             .set_counter_mode(pwm::CounterMode::UpAndDown)
-            // Set maximum duty cycle
             .set_max_duty(32767)
-            // enable PWM
             .enable();
 
         speaker
