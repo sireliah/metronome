@@ -14,8 +14,7 @@ use microbit::{
     hal::prelude::*,
     hal::{
         clocks::Clocks,
-        gpio,
-        prelude::OutputPin,
+        gpio::{self, Output, Pin, PushPull},
         pwm,
         rtc::{Rtc, RtcInterrupt},
         time::Hertz,
@@ -26,6 +25,7 @@ use microbit::{
 };
 
 const BASE_INTERVAL: u32 = 128;
+static OUT_PIN: Mutex<RefCell<Option<Pin<Output<PushPull>>>>> = Mutex::new(RefCell::new(None));
 static RTC: Mutex<RefCell<Option<Rtc<pac::RTC0>>>> = Mutex::new(RefCell::new(None));
 static SPEAKER: Mutex<RefCell<Option<pwm::Pwm<pac::PWM0>>>> = Mutex::new(RefCell::new(None));
 static INTERVAL: Mutex<RefCell<f64>> = Mutex::new(RefCell::new(BASE_INTERVAL as f64));
@@ -61,8 +61,8 @@ fn main() -> ! {
         rtc.enable_event(RtcInterrupt::Tick);
 
         // For jack output use board.pins.p0_02 and large pin 0 on the board
-        // let mut speaker_pin = board.pins.p0_02.into_push_pull_output(gpio::Level::Low);
         let mut speaker_pin = board.speaker_pin.into_push_pull_output(gpio::Level::Low);
+        let mut jack_pin = board.pins.p0_02.into_push_pull_output(gpio::Level::Low);
 
         // Use the PWM peripheral to generate a waveform for the speaker
         let speaker = pwm::Pwm::new(board.PWM0);
@@ -81,6 +81,7 @@ fn main() -> ! {
         cortex_m::interrupt::free(move |cs| {
             *RTC.borrow(cs).borrow_mut() = Some(rtc);
             *SPEAKER.borrow(cs).borrow_mut() = Some(speaker);
+            *OUT_PIN.borrow(cs).borrow_mut() = Some(jack_pin.degrade());
 
             // Configure RTC interrupt
             unsafe {
@@ -90,6 +91,21 @@ fn main() -> ! {
         });
 
         loop {
+            // Switch the output between internal speaker and GPIO pin 02 on two buttons pressed
+            if let (Ok(true), Ok(true)) = (button_a.is_low(), button_b.is_low()) {
+                cortex_m::interrupt::free(|cs| {
+                    if let Some(speaker) = SPEAKER.borrow(cs).borrow_mut().as_mut() {
+                        let inner_pin = OUT_PIN.borrow(cs).borrow_mut().take();
+                        if let Some(new_pin) = inner_pin {
+                            if let Some(old_pin) =
+                                speaker.swap_output_pin(pwm::Channel::C0, new_pin)
+                            {
+                                OUT_PIN.borrow(cs).borrow_mut().replace(old_pin);
+                            }
+                        }
+                    }
+                });
+            }
             if let Ok(true) = button_a.is_low() {
                 cortex_m::interrupt::free(move |cs| {
                     let mut interval = INTERVAL.borrow(cs).borrow_mut();
@@ -129,7 +145,6 @@ fn RTC0() {
 
     /* Enter critical section */
     cortex_m::interrupt::free(|cs| {
-        /* Borrow devices */
         if let (Some(speaker), Some(rtc)) = (
             SPEAKER.borrow(cs).borrow().as_ref(),
             RTC.borrow(cs).borrow().as_ref(),
@@ -139,7 +154,7 @@ fn RTC0() {
             if *SLEEP_COUNTER as f64 >= *interval {
                 speaker.set_period(Hertz(440));
                 let max_duty = speaker.max_duty();
-                speaker.set_duty_on_common(max_duty / 2);
+                speaker.set_duty_on_common(max_duty / 512);
                 *SLEEP_COUNTER = 0;
             } else {
                 speaker.disable();
