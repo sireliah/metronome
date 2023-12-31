@@ -25,10 +25,16 @@ use microbit::{
 };
 
 const BASE_INTERVAL: u32 = 128;
+const DUTY_SPEAKER: u16 = 8;
+const DUTY_JACK: u16 = 4096;
+
 static OUT_PIN: Mutex<RefCell<Option<Pin<Output<PushPull>>>>> = Mutex::new(RefCell::new(None));
 static RTC: Mutex<RefCell<Option<Rtc<pac::RTC0>>>> = Mutex::new(RefCell::new(None));
 static SPEAKER: Mutex<RefCell<Option<pwm::Pwm<pac::PWM0>>>> = Mutex::new(RefCell::new(None));
 static INTERVAL: Mutex<RefCell<f64>> = Mutex::new(RefCell::new(BASE_INTERVAL as f64));
+
+// Used to control volume and tone depending on the output device
+static DUTY_DIVISOR: Mutex<RefCell<u16>> = Mutex::new(RefCell::new(DUTY_JACK));
 
 fn to_bpm(interval: f64) -> f64 {
     round(BASE_INTERVAL as f64 / interval * 60.0)
@@ -67,8 +73,8 @@ fn main() -> ! {
         // Use the PWM peripheral to generate a waveform for the speaker
         let speaker = pwm::Pwm::new(board.PWM0);
         speaker
-            .set_output_pin(pwm::Channel::C0, speaker_pin.degrade())
-            .set_prescaler(pwm::Prescaler::Div16)
+            .set_output_pin(pwm::Channel::C0, jack_pin.degrade())
+            .set_prescaler(pwm::Prescaler::Div2)
             .set_period(Hertz(440u32))
             .set_counter_mode(pwm::CounterMode::UpAndDown)
             .set_max_duty(32767)
@@ -81,7 +87,7 @@ fn main() -> ! {
         cortex_m::interrupt::free(move |cs| {
             *RTC.borrow(cs).borrow_mut() = Some(rtc);
             *SPEAKER.borrow(cs).borrow_mut() = Some(speaker);
-            *OUT_PIN.borrow(cs).borrow_mut() = Some(jack_pin.degrade());
+            *OUT_PIN.borrow(cs).borrow_mut() = Some(speaker_pin.degrade());
 
             // Configure RTC interrupt
             unsafe {
@@ -93,18 +99,35 @@ fn main() -> ! {
         loop {
             // Switch the output between internal speaker and GPIO pin 02 on two buttons pressed
             if let (Ok(true), Ok(true)) = (button_a.is_low(), button_b.is_low()) {
+                rprintln!("Switch output");
                 cortex_m::interrupt::free(|cs| {
                     if let Some(speaker) = SPEAKER.borrow(cs).borrow_mut().as_mut() {
                         let inner_pin = OUT_PIN.borrow(cs).borrow_mut().take();
                         if let Some(new_pin) = inner_pin {
-                            if let Some(old_pin) =
-                                speaker.swap_output_pin(pwm::Channel::C0, new_pin)
-                            {
+                            if let Some(old_pin) = speaker.clear_output_pin(pwm::Channel::C0) {
+                                speaker.disable(pwm::Channel::C0);
+
                                 OUT_PIN.borrow(cs).borrow_mut().replace(old_pin);
+                                let mut divisor = DUTY_DIVISOR.borrow(cs).borrow_mut();
+
+                                if *divisor == DUTY_JACK {
+                                    rprintln!("Switching to speaker");
+                                    *divisor = DUTY_SPEAKER;
+                                    speaker.set_prescaler(pwm::Prescaler::Div16);
+                                } else {
+                                    rprintln!("Switching to jack");
+                                    *divisor = DUTY_JACK;
+                                    speaker.set_prescaler(pwm::Prescaler::Div2);
+                                }
                             }
+                            speaker
+                                .set_output_pin(pwm::Channel::C0, new_pin)
+                                .enable_channel(pwm::Channel::C0);
                         }
                     }
                 });
+                timer.delay_ms(500_u32);
+                continue;
             }
             if let Ok(true) = button_a.is_low() {
                 cortex_m::interrupt::free(move |cs| {
@@ -141,7 +164,6 @@ fn main() -> ! {
 #[interrupt]
 fn RTC0() {
     static mut SLEEP_COUNTER: u32 = 0;
-    static BEEP_DURATION: f64 = 8.0;
 
     /* Enter critical section */
     cortex_m::interrupt::free(|cs| {
@@ -150,11 +172,11 @@ fn RTC0() {
             RTC.borrow(cs).borrow().as_ref(),
         ) {
             let interval = INTERVAL.borrow(cs).borrow();
+            let duty_divisor = DUTY_DIVISOR.borrow(cs).borrow();
 
             if *SLEEP_COUNTER as f64 >= *interval {
-                speaker.set_period(Hertz(440));
                 let max_duty = speaker.max_duty();
-                speaker.set_duty_on_common(max_duty / 512);
+                speaker.set_duty_on_common(max_duty / *duty_divisor);
                 *SLEEP_COUNTER = 0;
             } else {
                 speaker.disable();
